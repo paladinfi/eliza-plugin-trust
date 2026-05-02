@@ -1,0 +1,92 @@
+{
+  "name": "@paladinfi/eliza-plugin-trust",
+  "version": "0.0.1",
+  "description": "Pre-trade trust verification for ElizaOS evm agents — composed OFAC SDN + GoPlus + Etherscan + lookalike risk gate via x402-paid PaladinFi API on Base. Skeleton release; full LLM-prompt integration landing in v0.1.0.",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "homepage": "https://github.com/paladinfi/eliza-plugin-trust",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paladinfi/eliza-plugin-trust.git"
+  },
+  "bugs": {
+    "url": "https://github.com/paladinfi/eliza-plugin-trust/issues"
+  },
+  "author": "Mallesh @ Malcontent Games LLC (PaladinFi) <dev@paladinfi.com>",
+  "keywords": [
+    "elizaos",
+    "elizaos-plugin",
+    "eliza",
+    "trust",
+    "ofac",
+    "goplus",
+    "etherscan",
+    "lookalike",
+    "x402",
+    "paladinfi",
+    "base",
+    "defi",
+    "risk-gate"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "dependencies": {
+    "@elizaos/core": "^2.0.0-alpha.77",
+    "viem": "^2.21.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "agentConfig": {
+    "pluginType": "elizaos:plugin:1.0.0",
+    "pluginParameters": {
+      "PALADIN_TRUST_API_BASE": {
+        "type": "string",
+        "description": "Base URL for PaladinFi API. Defaults to https://swap.paladinfi.com if unset.",
+        "required": false,
+        "default": "https://swap.paladinfi.com",
+        "sensitive": false
+      },
+      "PALADIN_TRUST_MODE": {
+        "type": "string",
+        "description": "'preview' (free; sample-fixture response) or 'paid' (x402-settled at $0.001 USDC/call on Base). Defaults to 'preview' for v0.0.1 — paid mode requires the wallet runtime to support x402 settlement and is wired in v0.1.0.",
+        "required": false,
+        "default": "preview",
+        "sensitive": false
+      },
+      "PALADIN_TRUST_DEFAULT_CHAIN_ID": {
+        "type": "string",
+        "description": "EIP-155 chain id for trust-check requests when not derived from message context. PaladinFi v1 supports Base only (8453). Other EVMs return 400.",
+        "required": false,
+        "default": "8453",
+        "sensitive": false
+      }
+    }
+  }
+}
