@@ -1,7 +1,7 @@
 {
   "name": "@paladinfi/eliza-plugin-trust",
-  "version": "0.0.2",
-  "description": "Pre-trade trust verification for ElizaOS evm agents — composed OFAC SDN + GoPlus + Etherscan + lookalike risk gate via x402-paid PaladinFi API on Base. Skeleton release; full LLM-prompt integration landing in v0.1.0.",
+  "version": "0.1.0",
+  "description": "Pre-trade trust verification for ElizaOS evm agents — composed OFAC SDN + GoPlus + Etherscan + lookalike risk gate via x402-paid PaladinFi API on Base. Natural-language LLM extraction; preview (free) and paid ($0.001 USDC/call) modes.",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -47,26 +47,30 @@
     "CHANGELOG.md"
   ],
   "sideEffects": false,
-  "peerDependencies": {
-    "@elizaos/core": "^2.0.0-alpha.77"
+  "engines": {
+    "node": ">=20"
   },
-  "peerDependenciesMeta": {
-    "@elizaos/core": {
-      "optional": false
-    }
+  "peerDependencies": {
+    "@elizaos/core": "2.0.0-alpha.77"
   },
   "dependencies": {
-    "viem": "^2.21.0",
+    "@x402/core": "2.11.0",
+    "@x402/evm": "2.11.0",
+    "@x402/fetch": "2.11.0",
+    "viem": "2.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@elizaos/core": "^2.0.0-alpha.77",
+    "@elizaos/core": "2.0.0-alpha.77",
     "@types/node": "^22.0.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
   "publishConfig": {
@@ -84,7 +88,7 @@
       },
       "PALADIN_TRUST_MODE": {
         "type": "string",
-        "description": "'preview' (free; sample-fixture response) or 'paid' (x402-settled at $0.001 USDC/call on Base). Defaults to 'preview' for v0.0.1 — paid mode requires the wallet runtime to support x402 settlement and is wired in v0.1.0.",
+        "description": "'preview' (free; sample-fixture response) or 'paid' (x402-settled at $0.001 USDC/call on Base). Paid mode requires constructing the plugin via createPaladinTrustPlugin({ walletClientAccount }) — env-only paid mode is not supported in v0.1.0.",
         "required": false,
         "default": "preview",
         "sensitive": false
@@ -94,6 +98,13 @@
         "description": "EIP-155 chain id for trust-check requests when not derived from message context. PaladinFi v1 supports Base only (8453). Other EVMs return 400.",
         "required": false,
         "default": "8453",
+        "sensitive": false
+      },
+      "PALADIN_TRUST_ALLOW_INSECURE": {
+        "type": "string",
+        "description": "PREVIEW MODE ONLY escape hatch — set to '1' or 'true' to permit non-HTTPS PALADIN_TRUST_API_BASE for testnet/dev. NO EFFECT in paid mode (paid mode is HTTPS-only and rejects non-HTTPS at boot regardless of this flag).",
+        "required": false,
+        "default": "",
         "sensitive": false
       }
     }

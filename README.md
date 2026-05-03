@@ -2,17 +2,86 @@
 
 **Pre-trade composed risk gate for ElizaOS evm agents** — OFAC SDN + GoPlus token security + Etherscan source verification + anomaly heuristics + lookalike detection. Single x402-paid call against [PaladinFi](https://swap.paladinfi.com) on Base.
 
-> **v0.0.1 is a skeleton release.** Full functionality (LLM-prompt parameter extraction + paid x402 settlement) lands in **v0.1.0** within ~2 weeks of the public [Eliza Discussion](https://github.com/orgs/elizaOS/discussions/7242) (posted 2026-05-02). The skeleton is published to anchor that public commitment with real, public, MIT-licensed code rather than a design doc.
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Chain](https://img.shields.io/badge/chain-Base%208453-2563eb)](https://basescan.org/)
-[![Status](https://img.shields.io/badge/status-skeleton%20v0.0.1-orange)](https://github.com/paladinfi/eliza-plugin-trust)
+[![npm](https://img.shields.io/badge/npm-v0.1.0-cb3837)](https://www.npmjs.com/package/@paladinfi/eliza-plugin-trust)
+
+---
+
+## Why this vs. other agent-trust plugins?
+
+Most agent-trust plugins focus on *agent identity* — proving that the entity you're talking to is who they claim. `@paladinfi/eliza-plugin-trust` is different: it grades the **token contract risk** of an asset before your agent transacts it. Given an EVM token address, it returns a recommendation (`allow` / `warn` / `block`) plus structured factors covering OFAC SDN status, ownership/proxy patterns, source verification, and lookalike-symbol risk. Use this plugin alongside agent-identity tooling, not instead of it. Preview mode is free and unauthenticated; paid mode settles $0.001 USDC per check via x402 on Base for higher rate limits and signed responses.
+
+## Quick start (preview mode)
+
+```bash
+npm install @paladinfi/eliza-plugin-trust
+# or pnpm add / bun add
+```
+
+```ts
+import { paladinTrustPlugin } from "@paladinfi/eliza-plugin-trust";
+
+export const character = {
+  name: "MyAgent",
+  plugins: [paladinTrustPlugin], // preview-mode by default; no wallet required
+  // ...
+};
+```
+
+If your character config types `plugins` as `string[]` (npm-name resolution at startup), use `["@paladinfi/eliza-plugin-trust"]` instead and ensure the package is installed. Both shapes are supported by Eliza; pick whichever matches your existing setup.
+
+Then in chat: *"check 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 on Base"* — the action extracts the address (and optionally chainId, taker) from natural language via the standard Eliza v2-alpha prompt-template flow (`composePromptFromState` + `useModel(ModelType.TEXT_SMALL)` + `parseKeyValueXml`) and returns the trust verdict.
+
+For programmatic invocation, pass `options.address` directly to bypass LLM extraction.
+
+Preview responses are sample fixtures: every factor has `real: false` and the recommendation is `sample-` prefixed (`sample-allow` / `sample-warn` / `sample-block`) so a screenshot cannot be cropped into a misleading "real" assessment. Paid responses **omit** the `real` field on each factor (the schema defaults absent values to `true`) and use plain `allow`/`warn`/`block`.
+
+## Paid mode wiring
+
+**Cost: $0.001 USDC per call. Fund a dedicated wallet with ~$0.10 USDC + ~$0.50 ETH (gas reserve, though x402 EIP-3009 settlement is gasless from the agent's perspective) on Base to start. That covers ~100 trust checks.**
+
+Paid mode settles $0.001 USDC per call on Base via [x402](https://x402.gitbook.io/) for higher rate limits and signed responses (every factor `real: true`, recommendation ∈ `{allow, warn, block}`). Requires a viem `LocalAccount`.
+
+```ts
+import { privateKeyToAccount } from "viem/accounts";
+import { createPaladinTrustPlugin } from "@paladinfi/eliza-plugin-trust";
+
+// Use a DEDICATED plugin wallet — never your treasury / main signing key.
+// Fund with ~$0.10 USDC + dust ETH (~$0.50) on Base for ~100 trust checks.
+const account = privateKeyToAccount(
+  process.env.PALADIN_TRUST_KEY as `0x${string}`,
+);
+
+export const character = {
+  name: "MyAgent",
+  plugins: [
+    createPaladinTrustPlugin({
+      walletClientAccount: account, // LocalAccount; presence enables paid mode
+      // mode: "paid" is inferred when walletClientAccount is present
+    }),
+  ],
+  // ...
+};
+```
+
+**Pre-sign safety.** Every paid call validates the server's 402 challenge against hard-coded constants (Base USDC contract, PaladinFi treasury address, $0.01 max amount, EIP-3009 only — no Permit2, 10-min validity window cap) inside an `onBeforePaymentCreation` hook. If any field deviates — wrong asset, redirected `payTo`, downgraded protocol version, spoofed EIP-712 domain — the call aborts client-side **before viem signs anything**, and the resulting error is prefixed `paladin-trust BLOCKED pre-sign:` so operators can grep / alert on it. See [`src/x402/validate.ts`](./src/x402/validate.ts) and [`src/x402/constants.ts`](./src/x402/constants.ts) for the full set of checks.
+
+**Boot-time validation.** `createPaladinTrustPlugin({ mode: "paid" })` without a `walletClientAccount` (or with a JsonRpcAccount/SmartAccount that lacks `signTypedData`) throws synchronously at agent startup, not at first message.
+
+**Do not stringify the plugin or its config.** The `walletClientAccount` is held in a closure and attached non-enumerably to the resolved config to avoid accidental serialization, but defensive logging in your own code should still skip the plugins array.
+
+## Migration from v0.0.x
+
+- **Default export still works** — `import { paladinTrustPlugin }` continues to give you preview mode with no config changes.
+- **Paid mode now requires explicit wallet injection.** v0.0.x had a placeholder paid path that silently downgraded with a warn; v0.1.0 makes it real and requires `createPaladinTrustPlugin({ walletClientAccount })`. The plugin does **not** auto-resolve `EVM_PRIVATE_KEY` from `runtime.getSetting()` — that's deferred to v0.2.0 to avoid surprising key reuse with `@elizaos/plugin-evm`. If you've been setting `PALADIN_TRUST_MODE=paid` expecting it to work without a wallet, the env-only path still degrades to preview with the warn `[paladin-trust] PALADIN_TRUST_MODE=paid but plugin was constructed without walletClientAccount. Falling back to preview.` — switch to the factory above to actually enable paid.
+- **Action name unchanged** — `PALADIN_TRUST_CHECK` (similes: `CHECK_TOKEN_SAFETY`, `PRE_TRADE_TRUST_CHECK`, `PALADIN_TRUST`, `VERIFY_TOKEN`) still registers; existing character configs that reference it by name still work.
+- **`@elizaos/core` is now a peerDep, pinned exact to `2.0.0-alpha.77`.** Match this in your project's deps. On `alpha.78+` you'll see a peerDep mismatch warning until we re-pin; the runtime calls (`composePromptFromState`, `useModel`, `parseKeyValueXml`, `ModelType.TEXT_SMALL`) are unlikely to break across patch alphas — file an issue at https://github.com/paladinfi/eliza-plugin-trust/issues if you observe a runtime symptom, or use `--legacy-peer-deps` while waiting for a re-pin.
+- **Action handler now accepts natural-language messages.** Pass `options.address` to bypass extraction (programmatic), or send a message like *"verify 0x... on Base"* to trigger LLM extraction.
 
 ---
 
 ## What it does
-
-When wired into an ElizaOS character's action graph, this plugin gives the agent a single tool call to run a composed risk check on a token contract before swapping into it. The check covers:
 
 | Factor | Source | Cadence |
 |---|---|---|
@@ -22,41 +91,7 @@ When wired into an ElizaOS character's action graph, this plugin gives the agent
 | **Anomaly heuristics** | Fresh-deploy / low-holder / proxy patterns | On-call |
 | **Lookalike detection** | Symbol/name proximity vs known-asset whitelist + recently-active tokens | On-call |
 
-Returns `recommendation: allow | warn | block` plus per-factor breakdown. The intended pattern: the agent abstains from the swap on `block`, surfaces a warning on `warn`, proceeds on `allow`.
-
-## Modes
-
-| Mode | Endpoint | Cost | Returns | v0.0.1 status |
-|---|---|---|---|---|
-| `preview` (default) | `POST /v1/trust-check/preview` | Free, no API key, no payment | Sample fixture (every factor `real: false`, `recommendation` is `sample-` prefixed) | ✅ Implemented |
-| `paid` | `POST /v1/trust-check` | $0.001 USDC/call settled via x402 on Base | Live evaluation (every factor `real: true`, `recommendation` ∈ {allow, warn, block}) | ⏳ v0.1.0 (requires wallet runtime + EIP-3009 signing) |
-
-## Install
-
-```bash
-npm install @paladinfi/eliza-plugin-trust
-# or
-pnpm add @paladinfi/eliza-plugin-trust
-# or
-bun add @paladinfi/eliza-plugin-trust
-```
-
-Peer dependency: `@elizaos/core@^2.0.0-alpha.77`. Tested against the alpha release line; feedback welcome on the [Eliza Discussion](https://github.com/orgs/elizaOS/discussions/7242) if you encounter compatibility issues with newer alphas.
-
-## Use in a character
-
-```ts
-import { paladinTrustPlugin } from "@paladinfi/eliza-plugin-trust";
-
-// In your character config / runtime setup:
-const runtime = new AgentRuntime({
-  // ...
-  plugins: [
-    paladinTrustPlugin,
-    // ...your other plugins
-  ],
-});
-```
+The intended pattern: agent abstains from the swap on `block`, surfaces a warning on `warn`, proceeds on `allow`.
 
 ## Configuration
 
@@ -64,34 +99,10 @@ Set via runtime settings (`runtime.getSetting`) or environment variables:
 
 | Key | Default | Description |
 |---|---|---|
-| `PALADIN_TRUST_API_BASE` | `https://swap.paladinfi.com` | Base URL of the PaladinFi service. |
-| `PALADIN_TRUST_MODE` | `preview` | `preview` (free; sample fixture) or `paid` (x402-settled, v0.1.0+). |
+| `PALADIN_TRUST_API_BASE` | `https://swap.paladinfi.com` | Base URL of the PaladinFi service. Paid mode requires HTTPS regardless of any override. |
+| `PALADIN_TRUST_MODE` | `preview` | `preview` (free; sample fixture) or `paid` (x402-settled). Paid mode also requires constructing the plugin via `createPaladinTrustPlugin({ walletClientAccount })`. |
 | `PALADIN_TRUST_DEFAULT_CHAIN_ID` | `8453` | EIP-155 chain id used when not derived from message context. PaladinFi v1 supports Base only (8453); other EVMs return HTTP 400. |
-
-## Calling the action
-
-The action is registered as `PALADIN_TRUST_CHECK` (similes: `CHECK_TOKEN_SAFETY`, `PRE_TRADE_TRUST_CHECK`, `PALADIN_TRUST`, `VERIFY_TOKEN`).
-
-**v0.0.1 calling convention**: pass the buy-token address explicitly via `options.address`:
-
-```ts
-import type { Memory } from "@elizaos/core";
-
-const result = await runtime.executeAction(
-  "PALADIN_TRUST_CHECK",
-  message,
-  state,
-  {
-    address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC on Base
-    chainId: 8453,
-  }
-);
-
-// result.values.paladinTrustRecommendation: "sample-allow" | "sample-warn" | "sample-block" (preview)
-// result.data.response: full TrustCheckResponse
-```
-
-In **v0.1.0**, the action will extract `address`, `chainId`, and `taker` from the user's natural-language message via the standard ElizaOS prompt-template flow (see `plugin-evm/transfer.ts` for the canonical pattern). For now, parameter passing is explicit.
+| `PALADIN_TRUST_ALLOW_INSECURE` | (unset) | Set to `1` to allow non-HTTPS `apiBase` for testnet/dev. Has **no effect** on paid mode (paid mode is HTTPS-only). |
 
 ## Response shape
 
@@ -147,21 +158,23 @@ curl -sS -X POST https://swap.paladinfi.com/v1/trust-check/preview \
 
 ## Security & disclosures
 
-- **Non-custodial**: PaladinFi never holds, signs, or moves user funds. Every transaction is signed by the calling wallet.
+- **Non-custodial**: PaladinFi never holds, signs, or moves user funds. Every paid trust-check is settled by the calling wallet's own EIP-3009 signature against the published USDC contract on Base.
+- **Pre-sign hard constants**: paid mode signs only against `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (Base USDC) → `0xeA8C33d018760D034384e92D1B2a7cf0338834b4` (PaladinFi treasury), max $0.01/call, EIP-3009 only. A compromised PaladinFi server cannot redirect a signed authorization to a different recipient/asset/chain. Validation logic is deterministic and auditable: see [`src/x402/validate.ts`](./src/x402/validate.ts).
 - **Sample fixture defense**: preview responses are explicitly marked (`_preview: true`, `recommendation: "sample-..."`, every factor `real: false`) so they cannot be screenshot-cropped into a misleading "real" assessment.
-- **Coverage caveats** (carried into v0.0.1): GoPlus signals are a leading indicator — recently-deployed contracts may not yet be classified. Out-of-scope today: LP-lock status, deployer rug history, pump-dump/wash-trade signals. These are roadmap items; the [Eliza Discussion](https://github.com/orgs/elizaOS/discussions/7242) is open for prioritization input.
+- **Coverage caveats**: GoPlus signals are a leading indicator — recently-deployed contracts may not yet be classified. Out-of-scope today: LP-lock status, deployer rug history, pump-dump/wash-trade signals. The [Eliza Discussion](https://github.com/orgs/elizaOS/discussions/7242) is open for prioritization input.
 - **Chain coverage**: Base (chainId 8453) only at this time. Other EVMs on roadmap as the underlying feeds expand multi-chain.
+- **Library trust**: x402 settlement uses [`@x402/fetch@2.11.0`](https://www.npmjs.com/package/@x402/fetch), Apache-2.0, maintained by the x402 Foundation. Pinned exact; recommend `npm audit signatures` in CI.
+- **Eliza alpha drift**: tested against `@elizaos/core@2.0.0-alpha.77`. Newer alphas may shift `composePromptFromState` / `parseKeyValueXml` / `ModelType` semantics; if you hit issues on a different alpha, please file at the issues link below.
 
 ## Roadmap
 
-- **v0.1.0** (~2 weeks from 2026-05-02 / before 2026-05-16): full LLM-prompt extraction (matches `plugin-evm/transfer.ts` v2-alpha pattern); paid x402 settlement via wallet runtime; `paladin_trust_check` becomes invokable via natural language alongside the explicit-parameter path.
-- **v0.2.0**: integration tests against `@elizaos/core` alpha line; CI; toon-format compatibility.
+- **v0.2.0**: optional `EVM_PRIVATE_KEY` runtime auto-resolve (matching `@elizaos/plugin-evm`); broader integration tests against the `@elizaos/core` alpha line; toon-format compatibility.
 - **v0.3.0**: address-poisoning lookalike action exposed as a separate hook agents can compose into transfer flows (not just swap).
-- **v1.0.0**: production stable, multi-chain (as PaladinFi backend expands), v2-alpha conformance complete.
+- **v1.0.0**: production stable, multi-chain as PaladinFi backend expands.
 
 ## Contributing
 
-This is a community-feedback skeleton. Open issues / PRs at https://github.com/paladinfi/eliza-plugin-trust or comment on [Eliza Discussion #7242](https://github.com/orgs/elizaOS/discussions/7242).
+Open issues / PRs at https://github.com/paladinfi/eliza-plugin-trust or comment on [Eliza Discussion #7242](https://github.com/orgs/elizaOS/discussions/7242).
 
 ## Operator
 
@@ -169,9 +182,6 @@ Operated by **Malcontent Games LLC**, doing business as **PaladinFi**.
 
 - Public API: https://swap.paladinfi.com
 - Health: https://swap.paladinfi.com/health
-- Docs: https://swap.paladinfi.com (REST + MCP)
-- MCP Registry: `io.github.paladinfi/paladin-swap`
-- Smithery: https://smithery.ai/servers/paladinfi/paladin-swap
 - Terms: https://paladinfi.com/terms/
 - Privacy: https://paladinfi.com/privacy/
 

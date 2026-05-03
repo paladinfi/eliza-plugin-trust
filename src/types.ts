@@ -9,6 +9,7 @@
  */
 
 import { isAddress, type Address } from "viem";
+import type { LocalAccount } from "viem/accounts";
 import { z } from "zod";
 
 export const TRUST_FACTOR_SOURCES = [
@@ -34,7 +35,10 @@ export const trustFactorSchema = z.object({
   source: z.string(),
   signal: z.string(),
   details: z.string().optional(),
-  real: z.boolean(),
+  // `real` is present on preview responses (always false) and absent on paid
+  // responses (implicit true). Default to true so action handler logic
+  // (`f.real ? "" : " (sample)"`) renders paid factors without sample tag.
+  real: z.boolean().default(true),
 });
 export type TrustFactor = z.infer<typeof trustFactorSchema>;
 
@@ -58,7 +62,9 @@ export const trustCheckResponseSchema = z.object({
   address: z.string(),
   chainId: z.number(),
   taker: z.string().nullable().optional(),
-  request_id: z.string(),
+  // request_id is present on preview responses but absent on paid (verified
+  // empirically against live /v1/trust-check on 2026-05-04). Made optional.
+  request_id: z.string().optional(),
   trust: trustBlockSchema,
 });
 export type TrustCheckResponse = z.infer<typeof trustCheckResponseSchema>;
@@ -80,11 +86,16 @@ export type TrustCheckRequest = z.infer<typeof trustCheckRequestSchema>;
 /**
  * Plugin-level config shape resolved from runtime settings or env.
  * Defaults match `agentConfig.pluginParameters` in package.json.
+ *
+ * `walletClientAccount` is set non-enumerably by the factory (createPaladinTrustPlugin)
+ * — never via env. Paid mode requires a viem `LocalAccount` (i.e. an account with a
+ * local `signTypedData`). JsonRpcAccount / SmartAccount are not supported in v0.1.0.
  */
 export interface PaladinTrustConfig {
   apiBase: string;
   mode: "preview" | "paid";
   defaultChainId: number;
+  walletClientAccount?: LocalAccount;
 }
 
 export const DEFAULT_CONFIG: PaladinTrustConfig = {
