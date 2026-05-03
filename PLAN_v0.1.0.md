@@ -1,28 +1,80 @@
-# `@paladinfi/eliza-plugin-trust` v0.1.0 Implementation Plan
+# `@paladinfi/eliza-plugin-trust` v0.1.0 Implementation Plan — v2
 
-**Status:** AWAITING 3-ADVERSARY REVIEW
+**Status:** AWAITING 3-ADVERSARY REVIEW (v2 incorporates all v1-review findings)
 **Public deadline:** ≤ 2026-05-16 (per Eliza Discussion #7242 follow-up comment)
-**Drafted:** 2026-05-02 night
+**Drafted:** 2026-05-03 early (v2; v1 paused at REQUIRES-MAJOR-REWRITE from Engineering + Security)
 **Tracking issue:** [#1](https://github.com/paladinfi/eliza-plugin-trust/issues/1)
-**Reference plugin:** [`elizaos-plugins/plugin-evm`](https://github.com/elizaos-plugins/plugin-evm) (v2-alpha pattern, branch `alpha`, `transfer.ts` is the canonical)
+**Reference plugin:** [`elizaos-plugins/plugin-evm`](https://github.com/elizaos-plugins/plugin-evm) (v2-alpha, branch `alpha`, `transfer.ts` is the canonical)
+**Baseline:** v0.0.2 already shipped (peerDep fix, HTTPS enforcement, Zod enum, paid-mode graceful degrade)
+
+---
+
+## What changed from v1 plan to v2
+
+11 convergent findings from v1 review applied:
+
+1. **Drop hand-rolled x402 settlement → depend on `x402-fetch`** (Coinbase, Apache-2.0). Same library AgentKit's `x402ActionProvider` uses internally. Drops EIP-3009 implementation surface (security-critical) entirely. Effort cut from 3-5hr → ~30 min for the settlement layer.
+
+2. **Client-side validation of signed authorization** — hard-code `TREASURY` / `ASSET` / `NETWORK` / `MAX_AMOUNT` constants and assert equality before signing. Closes the wallet-drain footgun where a compromised server could request signing to an attacker address. Even with `x402-fetch` doing the heavy lifting, we wrap it with our own pre-sign assertions because library trust is one defense layer; client-side equality on the values is another.
+
+3. **Keep default mode as `preview` in v0.1.0** (NOT flip to `paid`). Security review flagged that flipping default to `paid` means `npm update` silently activates wallet signing. v0.0.2 already keeps preview default with graceful-degrade; v0.1.0 keeps that, and `paid` requires explicit opt-in.
+
+4. **HTTPS-only `apiBase`** with `PALADIN_TRUST_ALLOW_INSECURE=1` escape hatch — already shipped in v0.0.2, no work needed.
+
+5. **Boot-time constructor validation** — if `mode === "paid"`, fail at `PaladinTrustClient` constructor (or factory) when `walletClient` is missing/lacks an account/wrong chain. Surface misconfiguration immediately at boot, not at first call.
+
+6. **Validator wallet-readiness gate** — mirror `plugin-evm`'s `hasEvmPrivateKey` check in `createEvmActionValidator`. In paid mode, validator returns `false` if neither `walletClient` is in config nor `EVM_PRIVATE_KEY` is in runtime settings. The action doesn't surface in chat where it can't actually fire.
+
+7. **Pin `@elizaos/core` to exact `2.0.0-alpha.77`** — caret pre-release rules float the version unexpectedly. v0.0.2 already moved to peerDep; v0.1.0 tightens the version pin.
+
+8. **Strict response schema** — already shipped in v0.0.2 (`z.enum(TRUST_RECOMMENDATIONS)`).
+
+9. **Fix retry header reference** — moot since we're using `x402-fetch` which handles correctly (`PAYMENT-SIGNATURE` for v2).
+
+10. **Fix AgentKit `utils.ts` reference in plan** — `utils.ts` has discovery helpers, NOT signing code. The signing path is `@x402/fetch`'s `wrapFetchWithPayment`. Plan now correctly references this.
+
+11. **Add 1 vitest test** for `signX402Authorization` typed-data shape — defensive depth even though `x402-fetch` does the signing. Verifies our preconditions (constants, validation) are correct.
 
 ---
 
 ## Goals (must-have for v0.1.0)
 
-1. **LLM prompt-template extraction.** `paladin_trust_check` extracts `address` / `chainId` / `taker` from natural-language user messages via the v2-alpha pattern: `composePromptFromState` → `runtime.useModel(ModelType.TEXT_SMALL)` → `parseKeyValueXml`.
-2. **Paid x402 settlement** in `PaladinTrustClient.paid()`. Resolves the 402 challenge from `/v1/trust-check` via EIP-3009 USDC signing on Base (chainId 8453) at $0.001/call. Currently throws.
-3. **Mode default flips to `paid`.** Preview remains override-able via `PALADIN_TRUST_MODE=preview`.
-4. **CHANGELOG entry for v0.1.0** (already drafted in Unreleased section).
-5. **Bumped version**, published to npm, GitHub release tagged.
+1. **LLM prompt-template extraction.** `paladin_trust_check` extracts `address` / `chainId` / `taker` from natural-language messages via `composePromptFromState` + `runtime.useModel(ModelType.TEXT_SMALL)` + `parseKeyValueXml`.
+
+2. **Paid x402 settlement** in `PaladinTrustClient.paid()`. Wraps `x402-fetch`'s `wrapFetchWithPayment` with our own client-side validation (TREASURY / ASSET / NETWORK / MAX_AMOUNT assertions on the 402 challenge). Removes the v0.0.2 graceful-degrade for paid mode (paid mode now actually works).
+
+3. **Wallet client integration**. Accept `walletClient: WalletClient` (account-bound, viem) in `PaladinTrustConfig`. Boot-time validation: paid mode requires non-undefined `walletClient.account` and `walletClient.chain?.id === 8453`.
+
+4. **Validator wallet-readiness gate** in paid mode (mirror plugin-evm pattern).
+
+5. **Bumped version** `0.0.2` → `0.1.0`, published to npm, GitHub release tagged.
 
 ## Out of scope (defer to v0.2.0+)
 
-- **Validator factory pattern** matching `createEvmActionValidator` — keep the v0.0.1 keyword-regex validator. Reason: it works for v0.1.0; refactor if a real bug surfaces.
-- **Confirmation flow** (`confirmationRequired` / `isConfirmed`) — trust-check is read-only ($0.001 micropayment is small enough that pre-confirm friction is wrong UX).
-- **Vitest unit + integration test suite** matching plugin-evm scope — skeleton smoke test exists; expand in v0.2.0.
-- **Multi-chain support** — Base only at v0.1.0 (the underlying service is Base-only).
-- **TOON-format compatibility / build:prompts script** — hand-write the template as a TS string constant; skip plugin-evm's Bun build infra.
+- Multi-chain support — Base only at v0.1.0 (the underlying service is Base-only).
+- Full validator factory pattern (`createTrustCheckActionValidator`) — keep the v0.0.2 keyword-regex validator + the new wallet-readiness gate.
+- Confirmation flow (`confirmationRequired` / `isConfirmed`) — $0.001 micropayment doesn't warrant pre-confirm friction.
+- Vitest unit + integration test SUITE — ship 1 targeted test (typed-data shape); broader suite in v0.2.0.
+- TOON-format compatibility / build:prompts script.
+
+## Pre-flight cite verification (per `feedback_self_audit_before_review_2026-04-30.md`)
+
+| Cited surface | Status |
+|---|---|
+| `elizaos-plugins/plugin-evm/typescript/actions/transfer.ts` | LIVE (verified earlier) |
+| `elizaos-plugins/plugin-evm/prompts/transfer.txt` | LIVE (TOON format, verified) |
+| `composePromptFromState` from `@elizaos/core@2.0.0-alpha.77` | EXPORTED (verified by retrospective reviewer reading tarball `dist/utils.d.ts`) |
+| `parseKeyValueXml` from `@elizaos/core@2.0.0-alpha.77` | EXPORTED (verified, same path) |
+| `ModelType.TEXT_SMALL` | EXPORTED (`dist/types/model.d.ts`) |
+| `x402-fetch` npm package (Coinbase) | LIVE — `npm view x402-fetch` returns published package, Apache-2.0 |
+| `@x402/fetch` npm package (Coinbase scoped) | LIVE — also published; check which is preferred — likely `x402-fetch` for v1, `@x402/fetch` for v2 |
+| `viem` `signTypedData` | STANDARD viem usage |
+| Base USDC EIP-3009 contract `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | VERIFIED earlier via swap.paladinfi.com/health |
+| **PaladinFi `/v1/trust-check` returns x402 v2 challenge** | VERIFIED 2026-05-03 by retrospective reviewer — `accepts[0]: { scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "1000", payTo: "0xeA8C33d018760D034384e92D1B2a7cf0338834b4", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }` |
+
+All cites resolve live. No "NOT YET VERIFIED" rows.
+
+---
 
 ## Architecture
 
@@ -31,27 +83,27 @@
 ```
 src/
 ├── actions/
-│   └── trust-check.ts        [MODIFIED — wire LLM extraction]
+│   └── trust-check.ts        [MODIFIED — wire LLM extraction; remove paid-mode degrade (config still degrades, but handler now also handles paid mode)]
 ├── templates/                [NEW — directory]
-│   └── trust-check.ts        [NEW — prompt template + parsed-args type]
-├── client.ts                 [MODIFIED — implement paid() with x402 + EIP-3009]
-├── config.ts                 [MODIFIED — flip default mode to "paid"]
+│   └── trust-check.ts        [NEW — prompt template string constant]
+├── client.ts                 [MODIFIED — implement paid() via x402-fetch wrapper + client-side validation]
+├── config.ts                 [MODIFIED — add walletClient to config; add paid-mode boot-time validation]
 ├── x402/                     [NEW — directory]
-│   ├── settle.ts             [NEW — EIP-3009 signing + 402 challenge resolution]
-│   └── types.ts              [NEW — x402 wire-format types]
-├── types.ts                  [unchanged]
-└── index.ts                  [MODIFIED — export new symbols]
+│   ├── constants.ts          [NEW — hard-coded TREASURY, ASSET, NETWORK, MAX_AMOUNT]
+│   └── validate.ts           [NEW — pre-sign 402-challenge assertion helper]
+├── types.ts                  [MODIFIED — add walletClient to PaladinTrustConfig type]
+├── index.ts                  [MODIFIED — export new symbols]
+└── __tests__/                [NEW — directory]
+    └── x402-validate.test.ts [NEW — vitest test for client-side challenge validation]
 
 CHANGELOG.md                  [MODIFIED — promote v0.1.0 from Unreleased]
-README.md                     [MODIFIED — natural-language usage example, paid-mode docs]
-package.json                  [MODIFIED — version bump, default mode in agentConfig]
+README.md                     [MODIFIED — natural-language usage example, paid-mode wiring docs, v0.0.x→v0.1.0 migration section]
+package.json                  [MODIFIED — version bump, exact @elizaos/core pin, add x402-fetch, add vitest devDep, add test script]
 ```
 
 ### Component design
 
 **1. Prompt template (`src/templates/trust-check.ts`)**
-
-Hand-write as a string constant matching plugin-evm's TOON format:
 
 ```ts
 export const trustCheckTemplate = `Given the recent messages below:
@@ -59,21 +111,138 @@ export const trustCheckTemplate = `Given the recent messages below:
 {{recentMessages}}
 
 The user wants to verify a token contract before swapping into it. Extract:
-- Buy-token contract address (EIP-55 hex address; required if mentioned)
+- Buy-token contract address (EIP-55 hex address)
 - Chain ID (default 8453 / Base if not mentioned)
 - Optional: agent wallet address (taker)
 
 Respond using TOON format like this:
-address: 0x... (EIP-55 hex address of the token to verify, or empty)
+address: 0x... (EIP-55 hex address of the token to verify, or empty if not provided)
 chainId: number (e.g. 8453)
 taker: 0x... or empty
 
 IMPORTANT: Your response must ONLY contain the TOON document above. No preamble or explanation.`;
 ```
 
-**2. Action handler (`src/actions/trust-check.ts`)**
+**2. x402 constants (`src/x402/constants.ts`)**
 
-Replace the v0.0.1 `pickRequest()` (which just reads `options.address`) with:
+Hard-coded values verified live; **the package signs only authorizations matching ALL of these:**
+
+```ts
+export const PALADIN_TREASURY = "0xeA8C33d018760D034384e92D1B2a7cf0338834b4" as const;
+export const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
+export const BASE_NETWORK = "eip155:8453" as const;
+export const MAX_TRUST_CHECK_AMOUNT = 10_000n; // $0.01 cap = 10× expected $0.001 (in USDC's 6 decimals)
+export const X402_VERSION = 2 as const;
+```
+
+**3. x402 client-side validation (`src/x402/validate.ts`)**
+
+Validator runs against the decoded `payment-required` challenge BEFORE `x402-fetch` signs anything. If `x402-fetch` doesn't expose a pre-sign hook, we wrap our own `paid()` to fetch the 402 first, validate, then call `x402-fetch` to settle:
+
+```ts
+import {
+  PALADIN_TREASURY, BASE_USDC, BASE_NETWORK, MAX_TRUST_CHECK_AMOUNT, X402_VERSION,
+} from "./constants.js";
+
+export interface X402AcceptV2 {
+  scheme: string;
+  network: string;
+  asset: string;
+  amount: string;
+  payTo: string;
+  maxTimeoutSeconds?: number;
+  extra?: { name?: string; version?: string };
+}
+
+export interface X402ChallengeV2 {
+  x402Version: number;
+  accepts: X402AcceptV2[];
+}
+
+export function validatePaladinChallenge(challenge: X402ChallengeV2): X402AcceptV2 {
+  if (challenge.x402Version !== X402_VERSION) {
+    throw new Error(`x402 version ${challenge.x402Version} not supported (expected ${X402_VERSION})`);
+  }
+  const accept = challenge.accepts?.[0];
+  if (!accept) throw new Error("x402 challenge has no accepts[0]");
+
+  if (accept.scheme !== "exact") {
+    throw new Error(`x402 scheme "${accept.scheme}" not supported (expected "exact")`);
+  }
+  if (accept.network !== BASE_NETWORK) {
+    throw new Error(`x402 network "${accept.network}" rejected (expected "${BASE_NETWORK}")`);
+  }
+  if (accept.asset.toLowerCase() !== BASE_USDC.toLowerCase()) {
+    throw new Error(`x402 asset "${accept.asset}" rejected (expected USDC ${BASE_USDC})`);
+  }
+  if (accept.payTo.toLowerCase() !== PALADIN_TREASURY.toLowerCase()) {
+    throw new Error(`x402 payTo "${accept.payTo}" rejected (expected PaladinFi treasury ${PALADIN_TREASURY})`);
+  }
+  const amount = BigInt(accept.amount);
+  if (amount > MAX_TRUST_CHECK_AMOUNT) {
+    throw new Error(`x402 amount ${accept.amount} exceeds cap ${MAX_TRUST_CHECK_AMOUNT}`);
+  }
+  return accept;
+}
+```
+
+**4. Paid client (`src/client.ts`)**
+
+```ts
+import { wrapFetchWithPayment } from "x402-fetch";
+import { validatePaladinChallenge, type X402ChallengeV2 } from "./x402/validate.js";
+// ...
+
+async paid(req: TrustCheckRequest): Promise<TrustCheckResponse> {
+  if (!this.config.walletClient) {
+    throw new Error("paid mode requires walletClient (viem account-bound WalletClient on Base)");
+  }
+
+  const url = `${this.config.apiBase}/v1/trust-check`;
+
+  // Step 1: trigger 402 challenge ourselves so we can validate before signing
+  const probe = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+  });
+
+  if (probe.status === 200) {
+    // Server returned 200 without payment — verify trust block, return as-is
+    return trustCheckResponseSchema.parse(await probe.json());
+  }
+  if (probe.status !== 402) {
+    const body = await probe.text().catch(() => "<unreadable>");
+    throw new Error(`paid expected 402 challenge, got ${probe.status}: ${body.slice(0, 200)}`);
+  }
+
+  const challengeHeader = probe.headers.get("payment-required");
+  if (!challengeHeader) {
+    throw new Error("paid: 402 response missing payment-required header");
+  }
+  const decoded = JSON.parse(Buffer.from(challengeHeader, "base64").toString("utf8")) as X402ChallengeV2;
+
+  // CRITICAL: client-side validation BEFORE we let x402-fetch sign anything
+  validatePaladinChallenge(decoded);
+
+  // Step 2: now retry with x402-fetch handling the signing + retry
+  const paidFetch = wrapFetchWithPayment(globalThis.fetch, this.config.walletClient);
+  const settled = await paidFetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+  });
+
+  if (!settled.ok) {
+    throw new Error(`paid (after settlement) HTTP ${settled.status}`);
+  }
+  return trustCheckResponseSchema.parse(await settled.json());
+}
+```
+
+Note: this approach validates the challenge before letting `x402-fetch` sign. If `x402-fetch` exposes a pre-sign callback in a future version, we can simplify; for now, we make the 402 probe ourselves, validate, then hand off to `x402-fetch` for the second request.
+
+**5. Action handler (`src/actions/trust-check.ts`)**
 
 ```ts
 async function buildTrustCheckArgs(
@@ -81,228 +250,160 @@ async function buildTrustCheckArgs(
   message: Memory,
   runtime: IAgentRuntime,
   config: PaladinTrustConfig,
+  options?: TrustCheckOptions,
 ): Promise<TrustCheckRequest> {
+  // v0.1.0 backward-compat: explicit options.address bypasses LLM extraction
+  if (options?.address && isAddress(options.address as Address)) {
+    return trustCheckRequestSchema.parse({
+      address: options.address,
+      chainId: typeof options.chainId === "number" ? options.chainId : config.defaultChainId,
+      taker: typeof options.taker === "string" && isAddress(options.taker as Address) ? options.taker : undefined,
+    });
+  }
+
+  // Otherwise extract from natural-language message
   state = await runtime.composeState(message, ["RECENT_MESSAGES"], true);
-
-  const context = composePromptFromState({
-    state,
-    template: trustCheckTemplate,
-  });
-
-  const llmResponse = await runtime.useModel(ModelType.TEXT_SMALL, {
-    prompt: context,
-  });
-
+  const context = composePromptFromState({ state, template: trustCheckTemplate });
+  const llmResponse = await runtime.useModel(ModelType.TEXT_SMALL, { prompt: context });
   const parsed = parseKeyValueXml(llmResponse);
   if (!parsed) {
     throw new Error("paladin_trust_check: LLM response could not be parsed");
   }
 
-  // Validate address
   const address = String(parsed.address ?? "").trim();
   if (!address || !isAddress(address as Address)) {
-    throw new Error(
-      `paladin_trust_check: extracted address is not valid EIP-55 hex: "${address}"`,
-    );
+    throw new Error(`paladin_trust_check: extracted address invalid: "${address}"`);
   }
 
-  // Default chainId
   const chainIdRaw = String(parsed.chainId ?? config.defaultChainId);
-  const chainId = Number.parseInt(chainIdRaw, 10);
+  const chainId = Number.parseInt(chainIdRaw, 10) || config.defaultChainId;
 
-  // Optional taker
   const takerRaw = String(parsed.taker ?? "").trim();
-  const taker =
-    takerRaw && isAddress(takerRaw as Address) ? takerRaw : undefined;
+  const taker = takerRaw && isAddress(takerRaw as Address) ? takerRaw : undefined;
 
   return trustCheckRequestSchema.parse({ address, chainId, taker });
 }
 ```
 
-The handler retains backwards-compat with `options.address` — if explicit `options.address` is provided, skip LLM extraction. This is important for programmatic callers.
-
-**3. x402 settlement (`src/x402/settle.ts`)**
-
-The flow:
-1. POST to `/v1/trust-check` (no auth) → expect 402 Payment Required response with `payment-required` header
-2. Decode `payment-required` per x402 spec (base64-encoded JSON)
-3. Sign EIP-3009 `transferWithAuthorization` for USDC on Base ($0.001 = 1000 with 6 decimals)
-4. Re-POST with `Authorization: x402 <signed>` header
-5. Receive 200 with the live trust-check response
-
-Wallet integration: the plugin's existing `runtime` doesn't directly expose a signer. **Critical question:** does Eliza's `IAgentRuntime` provide a wallet? Looking at plugin-evm, they import `initWalletProvider` from `./providers/wallet` — i.e., they wire their OWN wallet provider that wraps the runtime's settings.
-
-For us, simplest path: accept a **viem `WalletClient`** as a config option, OR create a minimal `PaladinWalletProvider` that reads `EVM_PRIVATE_KEY` from runtime settings (matching plugin-evm convention).
-
-**Design decision:** for v0.1.0, accept an optional `walletClient` in `PaladinTrustConfig`. If absent, paid mode throws with clear error. This keeps us out of the wallet-provider abstraction business while letting agents that already have viem wallets integrate.
+**6. Validator wallet-readiness gate (`src/actions/trust-check.ts`)**
 
 ```ts
-export interface PaladinTrustConfig {
-  apiBase: string;
-  mode: "preview" | "paid";
-  defaultChainId: number;
-  walletClient?: WalletClient; // NEW in v0.1.0; required for paid mode
+function hasWalletReady(runtime: IAgentRuntime, config: PaladinTrustConfig): boolean {
+  if (config.mode !== "paid") return true; // preview mode doesn't need wallet
+  if (config.walletClient?.account && config.walletClient?.chain?.id === 8453) return true;
+  // Fall back to runtime setting check (future v0.2.0 will resolve key from settings)
+  return false;
+}
+
+validate: async (runtime, message, _state) => {
+  const text = (message?.content?.text ?? "").toString().toLowerCase();
+  if (!text) return false;
+  if (!/\b(trust[- ]?check|risk[- ]?gate|honeypot|ofac|sanctioned|verify[- ]?token|pre[- ]?trade)\b/.test(text)) {
+    return false;
+  }
+  // In paid mode, gate on wallet readiness so the action doesn't surface where it can't fire
+  const config = resolveConfig(runtime);
+  return hasWalletReady(runtime, config);
 }
 ```
-
-**4. Paid client (`src/client.ts`)**
-
-```ts
-async paid(req: TrustCheckRequest): Promise<TrustCheckResponse> {
-  if (!this.config.walletClient) {
-    throw new Error(
-      "paid mode requires `walletClient` in PaladinTrustConfig (viem WalletClient on Base)",
-    );
-  }
-
-  // Step 1: trigger 402
-  const url = `${this.config.apiBase}/v1/trust-check`;
-  const challenge = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-  });
-
-  if (challenge.status !== 402) {
-    // Either 200 (somehow free?) or unexpected error
-    if (challenge.ok) {
-      const json: unknown = await challenge.json();
-      return trustCheckResponseSchema.parse(json);
-    }
-    throw new Error(`paid HTTP ${challenge.status}`);
-  }
-
-  // Step 2: resolve x402 challenge
-  const paymentHeader = challenge.headers.get("payment-required");
-  if (!paymentHeader) {
-    throw new Error("paid: 402 response missing payment-required header");
-  }
-
-  const auth = await signX402Authorization(
-    this.config.walletClient,
-    paymentHeader,
-  );
-
-  // Step 3: re-request with Authorization
-  const settled = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `x402 ${auth}`,
-    },
-    body: JSON.stringify(req),
-  });
-
-  if (!settled.ok) {
-    const body = await settled.text().catch(() => "<unreadable>");
-    throw new Error(`paid (after settlement) HTTP ${settled.status}: ${body.slice(0, 500)}`);
-  }
-
-  const json: unknown = await settled.json();
-  return trustCheckResponseSchema.parse(json);
-}
-```
-
-The `signX402Authorization()` helper lives in `src/x402/settle.ts` and uses viem to sign the EIP-3009 `transferWithAuthorization` typed-data message.
 
 ### Testing strategy
 
-- **Smoke test extension** (no new test framework): extend `smoke-test.mjs` to add a paid-mode case, gated behind `PALADIN_TRUST_LIVE_PAID=1` env var. Default invocation runs only preview-mode checks (no wallet required).
-- **Manual integration**: against the live `/v1/trust-check` endpoint with a small Base testnet wallet (Sepolia for non-cost validation? or just real Base with $0.001 throwaway).
-- **Vitest tests deferred to v0.2.0** — smoke-test covers the must-have for v0.1.0.
+- **Smoke-test extension**: `smoke-test.mjs` extends to test challenge validation logic with mock challenges (good + bad). No real wallet needed.
+- **One vitest test** (`__tests__/x402-validate.test.ts`):
+  - Valid challenge passes
+  - Wrong network rejects
+  - Wrong asset rejects
+  - Wrong payTo rejects
+  - Amount over cap rejects
+  - Wrong x402Version rejects
+- **Manual integration**: real Base wallet (MetaMask `0xF6c99CEc5bd639316a19d2F56AfC14bd046d3a90`, ~$0.05 USDC pre-funded) against live `/v1/trust-check`. Verify settled tx on Basescan.
 
-### Sequencing (estimated ~6-10 hours)
+### Sequencing (estimated 3-5 hours)
 
-1. **Prompt template + LLM extraction** (~2 hr)
+1. **Add deps + scaffold** (~15 min)
+   - `npm install x402-fetch vitest --save-dev` (verify which package exact name; may be `@x402/fetch` for v2)
+   - Bump `package.json` version 0.0.2 → 0.1.0
+   - Pin `@elizaos/core` to exact `2.0.0-alpha.77`
+   - Update tsconfig if needed for vitest
+
+2. **Prompt template + LLM extraction** (~1 hr)
    - Write `src/templates/trust-check.ts`
-   - Modify `src/actions/trust-check.ts` to wire `composePromptFromState` + `runtime.useModel` + `parseKeyValueXml` (with options.address backwards-compat)
-   - Smoke-test: stub the runtime's `useModel` to return a fixed TOON response, verify args parse correctly
-   - Typecheck + build clean
+   - Modify `src/actions/trust-check.ts` `buildTrustCheckArgs` (LLM extraction with options.address bypass)
+   - Smoke-test with stubbed `runtime.useModel`
 
-2. **x402 settlement** (~3-5 hr — most uncertain)
-   - Write `src/x402/types.ts` with the wire-format types (decoded payment-required header)
-   - Write `src/x402/settle.ts` with the EIP-3009 signing function (uses viem's `signTypedData`)
-   - Modify `src/client.ts` `paid()` to do the 402 → sign → retry flow
-   - Add `walletClient?` to `PaladinTrustConfig`
+3. **x402 constants + validation** (~30 min)
+   - Write `src/x402/constants.ts`
+   - Write `src/x402/validate.ts`
+   - Vitest test (`__tests__/x402-validate.test.ts`)
 
-3. **Mode default flip + config** (~30 min)
-   - `src/types.ts` `DEFAULT_CONFIG.mode` = `"paid"`
-   - `package.json` `agentConfig.pluginParameters.PALADIN_TRUST_MODE.default` = `"paid"`
-   - README: update Configuration section + add wallet-required-for-paid disclosure
+4. **Paid client implementation** (~1 hr)
+   - Modify `src/client.ts` `paid()` to: probe 402 → decode → validate → handoff to `x402-fetch`
+   - Add `walletClient?: WalletClient` to `PaladinTrustConfig`
+   - Boot-time validation in `resolveConfig` or constructor
 
-4. **Documentation + release prep** (~1 hr)
-   - README "Use in a character" section: natural-language example showing the agent extracting buy-token from chat
-   - CHANGELOG.md: promote v0.1.0 from Unreleased
-   - Bump `package.json` version to `0.1.0`
-   - Update `src/index.ts` exports if new symbols
-   - Test reproducibility line in README
+5. **Validator wallet-readiness gate** (~15 min)
+   - Add `hasWalletReady` check to `validate`
 
-5. **Smoke test + publish** (~30 min)
-   - Run `npm run build` clean
-   - Run `node smoke-test.mjs` — 7+/7+ pass
+6. **Documentation + release prep** (~45 min)
+   - README natural-language example
+   - README "Migration from v0.0.x" section
+   - CHANGELOG: promote v0.1.0 from Unreleased
+   - Update `agentConfig.pluginParameters` description for `PALADIN_TRUST_MODE` (paid mode now works)
+
+7. **Build + smoke-test + manual paid test + publish** (~30-45 min)
+   - `npm run typecheck` clean
+   - `npm run build` clean
+   - `npm run test` (vitest) clean
+   - `node smoke-test.mjs` clean
+   - Manual paid test from MetaMask wallet on Base — observe USDC settled tx
+   - Re-run 3-adversary review on the IMPLEMENTATION (not just the plan)
+   - Apply minor fixes
    - `npm publish --access public`
-   - Verify via `curl https://registry.npmjs.org/@paladinfi/eliza-plugin-trust/0.1.0`
-   - Tag v0.1.0 GitHub release with notes
-   - Post follow-up comment on Eliza Discussion #7242 announcing v0.1.0
-   - Post Tweet 6 (Draft B in TWITTER_QUEUE)
-   - Close tracking issue #1 with a "shipped" comment
+   - GitHub release tagged `v0.1.0`
+   - Eliza Discussion #7242 follow-up comment announcing v0.1.0
+   - Tweet 6 (Draft B in TWITTER_QUEUE)
+   - Close tracking issue #1 with "shipped" comment + link to release
 
 ### Risks
 
-- **R1 [HIGH]: x402 spec details I don't know precisely.** The signing flow is documented but I haven't implemented it before. Mitigation: study x402 spec + AgentKit's `x402ActionProvider/utils.ts` (in-tree at coinbase/agentkit) which implements exactly this flow on the agent side. We can model our signing after their code (MIT-compatible with attribution).
+- **R1 [HIGH]: `x402-fetch` library API may not match what we need.** Library is young (Coinbase, Apache-2.0). Mitigation: read its README + source before depending on it. If it doesn't expose a pre-sign validation hook, our probe-then-handoff approach works around that. Verify `wrapFetchWithPayment` actually settles correctly on Base USDC.
 
-- **R2 [MED]: LLM extraction reliability.** If the model fails to produce valid TOON or omits required fields, the user gets a confusing error. Mitigation: explicit error messages naming what was missing/malformed, fall back to `options.address` if explicit, log the LLM's raw response on parse failure.
+- **R2 [MED]: LLM extraction reliability.** If model fails to produce valid TOON or omits fields, user gets confusing error. Mitigation: explicit error messages, options.address bypass for programmatic callers, log raw LLM response on parse failure.
 
-- **R3 [MED]: Backwards-compatibility break.** v0.0.1 users pass `options.address` explicitly. v0.1.0 adds LLM extraction as the primary path. Mitigation: handler tries `options.address` FIRST (if provided); falls back to LLM only if absent. Programmatic callers continue to work without changes.
+- **R3 [MED]: Wallet provider abstraction limited.** v0.1.0 requires user to construct viem `WalletClient` and pass it into config. Plugin-evm's `EVM_PRIVATE_KEY` runtime resolution is more user-friendly but more work; defer to v0.2.0.
 
-- **R4 [LOW]: Default mode flip.** v0.0.1 was `preview`. v0.1.0 default is `paid`. Existing users who set up against v0.0.1 with no mode override will SUDDENLY hit paid endpoint and need a wallet. Mitigation: clear CHANGELOG entry under "Breaking changes" section + README "Migration from v0.0.1" section noting the flip.
-
-- **R5 [LOW]: Wallet provider abstraction limited.** v0.1.0 requires the user to construct a viem `WalletClient` and pass it into config. This is explicit but more friction than auto-resolving from runtime settings (plugin-evm's pattern). Mitigation: this is acceptable for v0.1.0; v0.2.0 adds `EVM_PRIVATE_KEY` auto-resolution from runtime.
+- **R4 [LOW]: Manual paid test cost.** ~$0.05 USDC for ~50 calls during development. Acceptable.
 
 ### Definition of done
 
 - [ ] `npm run typecheck` clean
 - [ ] `npm run build` produces clean dist
-- [ ] `npm pack --dry-run` produces clean tarball (no junk; size ≤ 25 kB)
-- [ ] `node smoke-test.mjs` all checks pass (preview + paid-with-stub)
-- [ ] Manual paid-mode test with real Base wallet against live `/v1/trust-check`
+- [ ] `npm run test` (vitest x402-validate suite) — all 6+ assertions pass
+- [ ] `npm pack --dry-run` clean (size ≤ 30 kB; allowing for new x402/ dir + tests)
+- [ ] `node smoke-test.mjs` all checks pass (preview + challenge-validation stubs)
+- [ ] Manual paid-mode test from MetaMask wallet `0xF6c99CEc...` against live `/v1/trust-check` succeeds, settles USDC visible on Basescan
+- [ ] **3-adversary review on IMPLEMENTATION** (not just plan) before publish — Engineering + Security + Maintainer
+- [ ] All review HIGH/MED-sev fixes applied
 - [ ] CHANGELOG.md v0.1.0 entry promoted from Unreleased
-- [ ] README updated: Use in a character, Configuration, Cost, Roadmap, Migration sections
-- [ ] `package.json` version `0.0.1` → `0.1.0`, `agentConfig.pluginParameters.PALADIN_TRUST_MODE.default` flipped
-- [ ] Published to npm at `https://www.npmjs.com/package/@paladinfi/eliza-plugin-trust/v/0.1.0`
-- [ ] GitHub release `v0.1.0` tagged with release notes
-- [ ] Eliza Discussion #7242 follow-up comment posted announcing v0.1.0
-- [ ] Tracking issue #1 closed with "shipped" comment
+- [ ] README updated: natural-language example, paid-mode wiring, v0.0.x→v0.1.0 migration section
+- [ ] `package.json` version `0.0.2` → `0.1.0`, `@elizaos/core` pinned to exact `2.0.0-alpha.77`, `agentConfig.pluginParameters.PALADIN_TRUST_MODE.default` confirmed `"preview"` (not flipped per security review)
+- [ ] Published to npm at `v/0.1.0`
+- [ ] GitHub release `v0.1.0` tagged with notes + linking to npm
+- [ ] Eliza Discussion #7242 follow-up comment posted (uses Draft B from TWITTER_QUEUE.md)
+- [ ] Tracking issue #1 closed with "shipped" comment + release link
 - [ ] Tweet 6 posted to `@paladin_fi`
-
----
-
-## Pre-flight cite verification
-
-| Cited surface | Status |
-|---|---|
-| `elizaos-plugins/plugin-evm/typescript/actions/transfer.ts` | LIVE (verified earlier this session) |
-| `elizaos-plugins/plugin-evm/prompts/transfer.txt` | LIVE (verified earlier; format is TOON not XML) |
-| `composePromptFromState` from `@elizaos/core` | EXISTS (used by transfer.ts; need to verify exact import path is stable in alpha.77) |
-| `parseKeyValueXml` from `@elizaos/core` | EXISTS (used by transfer.ts) |
-| `ModelType.TEXT_SMALL` | EXISTS (used by transfer.ts) |
-| `coinbase/agentkit/typescript/agentkit/src/action-providers/x402/utils.ts` | LIVE (read this session — has full x402 settlement code we can model) |
-| viem `signTypedData` for EIP-3009 | STANDARD viem usage; well-documented |
-| Base USDC EIP-3009 contract | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (verified) |
-| `https://swap.paladinfi.com/v1/trust-check` returns 402 with `payment-required` header | NOT YET VERIFIED — must probe before implementing client; if shape differs from x402 spec, plan adjusts |
-
-**Action required before implementation starts:** probe `POST /v1/trust-check` with no auth, decode the 402 response, confirm x402-compliant payment-required header is returned. If the live endpoint differs from the standard x402 spec, the settlement code adjusts.
 
 ---
 
 ## Adversarial review gate
 
-3 reviewers, parallel, each unforgiving:
+Per `feedback_no_deploy_without_adversarial_review.md` mandatory rule, this plan must pass 3-adversary review BEFORE implementation begins:
 
-1. **Engineering reviewer** — is the architecture sound? Are there bugs in the design? Is the v2-alpha pattern correctly mirrored? Any structural mistakes that will cost rewrite later?
+1. **Engineering reviewer** — verify x402-fetch integration is sound, LLM extraction matches plugin-evm canonical, validation flow correctness.
+2. **Security reviewer** — verify TREASURY/ASSET/NETWORK/MAX_AMOUNT constants are correct, validation runs before signing, no leak vectors in error paths. **Reviewer prompt MUST include "treat as audit not code review; if anything could result in funds loss name it explicitly."**
+3. **Maintainer / community reviewer** — verify scope cuts are appropriate, deadline is realistic, public commitment in Eliza Discussion #7242 is met by v0.1.0 deliverables.
 
-2. **Security reviewer** — x402 settlement = real money signing. Any leak vectors in EIP-3009 signing? Replay vulnerabilities? Wallet exposure in error messages? Race conditions in the 402-then-retry flow?
+If 2+ reviewers verdict APPROVE-AS-IS or APPROVE-WITH-MINOR-FIXES, apply minor fixes and proceed to implementation. If any reviewer verdicts REQUIRES-MAJOR-REWRITE, pause and revise to v3.
 
-3. **Maintainer / community moderator perspective** — is this what real Eliza plugin authors would build? Any cargo-culting from plugin-evm that doesn't apply to a read-only-API-call plugin? Is the scope right (not over-engineered, not under-engineered)?
-
-Output per reviewer: APPROVE-AS-IS / APPROVE-WITH-MINOR-FIXES / REQUIRES-MAJOR-REWRITE / REJECT-PAUSE-AND-REPLAN.
+After implementation, run a SECOND 3-adversary review on the actual code (not just the plan) before npm publish.
