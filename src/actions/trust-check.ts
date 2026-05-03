@@ -123,13 +123,9 @@ export const trustCheckAction: Action = {
 
     const req = pickRequest(options as TrustCheckOptions | undefined, config.defaultChainId);
 
-    if (config.mode === "paid") {
-      throw new Error(
-        "paladin_trust_check paid mode is not implemented in v0.0.1. " +
-          "Set PALADIN_TRUST_MODE=preview or wait for v0.1.0.",
-      );
-    }
-
+    // v0.0.x: config.ts gracefully degrades any "paid" mode request to
+    // "preview" with a one-time console.warn. The action handler never sees
+    // mode === "paid" in v0.0.x. v0.1.0 wires the paid x402 settlement path.
     const response = await client.preview(req);
 
     const verdict = response.trust.recommendation;

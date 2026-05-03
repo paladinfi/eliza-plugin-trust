@@ -21,22 +21,61 @@ function readSetting(runtime: IAgentRuntime, key: string): string | undefined {
   return env && env.length > 0 ? env : undefined;
 }
 
+let _paidWarnEmitted = false;
+
 export function resolveConfig(runtime: IAgentRuntime): PaladinTrustConfig {
-  const apiBase =
+  const rawApiBase =
     readSetting(runtime, "PALADIN_TRUST_API_BASE") ?? DEFAULT_CONFIG.apiBase;
 
+  // HTTPS enforcement: reject non-HTTPS bases unless explicit dev override.
+  // Localhost is allowed for development without the override.
+  const apiBase = enforceHttps(rawApiBase, runtime);
+
+  // Graceful-degrade: v0.0.x silently downgrades `paid` → `preview` (with a
+  // one-time warn) since paid mode lands in v0.1.0. Without this, env vars
+  // set per the public docs would surface the throw at first NL invocation.
   const modeRaw =
     readSetting(runtime, "PALADIN_TRUST_MODE") ?? DEFAULT_CONFIG.mode;
-  const mode: PaladinTrustConfig["mode"] =
+  let mode: PaladinTrustConfig["mode"] =
     modeRaw === "paid" ? "paid" : "preview";
+
+  if (mode === "paid") {
+    if (!_paidWarnEmitted) {
+      const warn =
+        "[paladin-trust] paid mode is not implemented in v0.0.x — falling back to preview. Paid x402 settlement lands in v0.1.0 (https://github.com/paladinfi/eliza-plugin-trust/issues/1).";
+      // Use console.warn to avoid coupling to a specific runtime logger.
+      console.warn(warn);
+      _paidWarnEmitted = true;
+    }
+    mode = "preview";
+  }
 
   const chainIdRaw =
     readSetting(runtime, "PALADIN_TRUST_DEFAULT_CHAIN_ID") ??
     String(DEFAULT_CONFIG.defaultChainId);
   const parsedChain = Number.parseInt(chainIdRaw, 10);
-  const defaultChainId = Number.isFinite(parsedChain) && parsedChain > 0
-    ? parsedChain
-    : DEFAULT_CONFIG.defaultChainId;
+  const defaultChainId =
+    Number.isFinite(parsedChain) && parsedChain > 0
+      ? parsedChain
+      : DEFAULT_CONFIG.defaultChainId;
 
   return { apiBase, mode, defaultChainId };
+}
+
+function enforceHttps(url: string, runtime: IAgentRuntime): string {
+  if (url.startsWith("https://")) return url;
+  // Allow http://localhost for development without explicit override.
+  if (
+    url.startsWith("http://localhost") ||
+    url.startsWith("http://127.0.0.1")
+  ) {
+    return url;
+  }
+  // Allow other http:// only when explicit env override is set (testnet/dev).
+  const allow = readSetting(runtime, "PALADIN_TRUST_ALLOW_INSECURE") ?? "";
+  if (allow === "1" || allow.toLowerCase() === "true") return url;
+  throw new Error(
+    `[paladin-trust] PALADIN_TRUST_API_BASE must use https:// (got "${url.slice(0, 80)}"). ` +
+      "Set PALADIN_TRUST_ALLOW_INSECURE=1 for non-HTTPS dev/testnet hosts.",
+  );
 }

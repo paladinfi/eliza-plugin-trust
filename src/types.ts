@@ -39,7 +39,10 @@ export const trustFactorSchema = z.object({
 export type TrustFactor = z.infer<typeof trustFactorSchema>;
 
 export const trustBlockSchema = z.object({
-  recommendation: z.string(),
+  // Constrain to the closed enum so server-side typos (e.g. "alllow") don't
+  // silently pass through to agent branching logic. Permissive `z.string()`
+  // was a v0.0.1 footgun caught in retrospective review (2026-05-02).
+  recommendation: z.enum(TRUST_RECOMMENDATIONS),
   recommendation_enum: z.array(z.string()).optional(),
   factors: z.array(trustFactorSchema),
   risk_score: z.number().nullable().optional(),

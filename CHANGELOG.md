@@ -6,6 +6,35 @@ All notable changes to `@paladinfi/eliza-plugin-trust` are documented here. The 
 
 Tracking issue: [#1](https://github.com/paladinfi/eliza-plugin-trust/issues/1)
 
+## [0.0.2] - 2026-05-03
+
+Retrospective adversarial-review patch. Caught by 3-adversary review (Engineering+Security + Maintainer) on the v0.0.1 ship after the deploy-without-review gap was codified (memory: `feedback_no_deploy_without_adversarial_review.md`).
+
+### Fixed
+
+- **`@elizaos/core` moved from `dependencies` to `peerDependencies`.** Plugin frameworks must let the host runtime provide the framework — bundling our own copy of `@elizaos/core` would cause duplicate-install issues where the host's `Plugin` symbol doesn't `===` ours and runtime registration silently fails. Standard third-party plugin convention.
+- **`paid` mode now gracefully degrades to `preview` with a one-time `console.warn`.** v0.0.1 threw at handler-time if `PALADIN_TRUST_MODE=paid` was set — but the public docs advertise paid mode as a configuration option. Users following the docs hit the throw on first NL invocation. v0.0.2 silently downgrades + warns once. v0.1.0 wires real paid x402 settlement.
+- **HTTPS enforcement on `PALADIN_TRUST_API_BASE`.** v0.0.1 accepted any URL scheme. v0.0.2 rejects non-HTTPS bases unless `PALADIN_TRUST_ALLOW_INSECURE=1` is set (testnet/dev) or the host is `localhost`/`127.0.0.1`. Closes the silent-malicious-base attack vector.
+- **`recommendation` Zod schema tightened from `z.string()` to `z.enum(TRUST_RECOMMENDATIONS)`.** v0.0.1 accepted arbitrary strings — a server-side typo (`"alllow"`) would silently pass validation and the agent would branch on it as `verdict === "allow"`. v0.0.2 fails parse on unrecognized values.
+- **`CHANGELOG.md` now included in published tarball.** v0.0.1's `files` array omitted it.
+
+### No breaking changes for v0.0.1 consumers
+
+- The peerDep shift requires `@elizaos/core` already installed in the host project — which is the assumption for any Eliza plugin. No code change required for v0.0.1 consumers.
+- The `paid` mode degrade is silent (was a throw before); existing callers with `PALADIN_TRUST_MODE=paid` env now succeed instead of fail. Strict regression-safe.
+- HTTPS enforcement only fires on misconfigured `PALADIN_TRUST_API_BASE`. Default config is HTTPS already.
+- Zod tightening only fails on responses the server should never return. If you observe parse failures in v0.0.2 you found a real server bug.
+
+### Verified
+
+- Adversarial review on v0.0.1 (4 reviewers in parallel: Engineering+Security and Maintainer for each of `eliza-plugin-trust` and the sister `agentkit-actions`).
+- All HIGH-sev findings from review applied; no MED-sev findings deferred.
+- `tsc --noEmit` clean.
+- `npm run build` emits clean dist.
+- `node smoke-test.mjs` all checks pass against live API.
+
+## [0.0.1] - 2026-05-02
+
 ### Planned for v0.1.0 (target ≤ 2026-05-16)
 
 - **LLM prompt-template extraction** — wire the v2-alpha pattern (`composePromptFromState` + `runtime.useModel(ModelType.TEXT_SMALL)` + `parseKeyValueXml`). Action accepts buy-token address from natural-language messages instead of explicit `options.address`.
