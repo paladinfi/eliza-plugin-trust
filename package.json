@@ -1,7 +1,7 @@
 {
   "name": "@paladinfi/eliza-plugin-trust",
-  "version": "0.1.0",
-  "description": "Pre-trade trust verification for ElizaOS evm agents — composed OFAC SDN + GoPlus + Etherscan + lookalike risk gate via x402-paid PaladinFi API on Base. Natural-language LLM extraction; preview (free) and paid ($0.001 USDC/call) modes.",
+  "version": "0.1.1",
+  "description": "Pre-trade trust verification for ElizaOS evm agents — composed OFAC SDN + GoPlus + Etherscan + anomaly-heuristics risk gate via x402-paid PaladinFi API on Base. Natural-language LLM extraction; preview (free) and paid ($0.001 USDC/call) modes.",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -24,7 +24,6 @@
     "ofac",
     "goplus",
     "etherscan",
-    "lookalike",
     "x402",
     "paladinfi",
     "base",

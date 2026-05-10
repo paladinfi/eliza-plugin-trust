@@ -1,6 +1,6 @@
 # @paladinfi/eliza-plugin-trust
 
-**Pre-trade composed risk gate for ElizaOS evm agents** — OFAC SDN + GoPlus token security + Etherscan source verification + anomaly heuristics + lookalike detection. Single x402-paid call against [PaladinFi](https://swap.paladinfi.com) on Base.
+**Pre-trade composed risk gate for ElizaOS evm agents** — OFAC SDN + GoPlus token security + Etherscan source verification + anomaly heuristics. Single x402-paid call against [PaladinFi](https://swap.paladinfi.com) on Base.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Chain](https://img.shields.io/badge/chain-Base%208453-2563eb)](https://basescan.org/)
@@ -10,7 +10,7 @@
 
 ## Why this vs. other agent-trust plugins?
 
-Most agent-trust plugins focus on *agent identity* — proving that the entity you're talking to is who they claim. `@paladinfi/eliza-plugin-trust` is different: it grades the **token contract risk** of an asset before your agent transacts it. Given an EVM token address, it returns a recommendation (`allow` / `warn` / `block`) plus structured factors covering OFAC SDN status, ownership/proxy patterns, source verification, and lookalike-symbol risk. Use this plugin alongside agent-identity tooling, not instead of it. Preview mode is free and unauthenticated; paid mode settles $0.001 USDC per check via x402 on Base for higher rate limits and signed responses.
+Most agent-trust plugins focus on *agent identity* — proving that the entity you're talking to is who they claim. `@paladinfi/eliza-plugin-trust` is different: it grades the **token contract risk** of an asset before your agent transacts it. Given an EVM token address, it returns a recommendation (`allow` / `warn` / `block`) plus structured factors covering OFAC SDN status, ownership/proxy patterns, and source verification. Use this plugin alongside agent-identity tooling, not instead of it. Preview mode is free and unauthenticated; paid mode settles $0.001 USDC per check via x402 on Base for higher rate limits and signed responses.
 
 ## Quick start (preview mode)
 
@@ -35,13 +35,13 @@ Then in chat: *"check 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 on Base"* — t
 
 For programmatic invocation, pass `options.address` directly to bypass LLM extraction.
 
-Preview responses are sample fixtures: every factor has `real: false` and the recommendation is `sample-` prefixed (`sample-allow` / `sample-warn` / `sample-block`) so a screenshot cannot be cropped into a misleading "real" assessment. Paid responses **omit** the `real` field on each factor (the schema defaults absent values to `true`) and use plain `allow`/`warn`/`block`.
+Preview responses are sample fixtures: every factor has `real: false` and the recommendation is `sample-` prefixed (`sample-allow` / `sample-warn` / `sample-block`) so a screenshot cannot be cropped into a misleading "real" assessment. Paid responses return factors with `real: true` for successful evaluations; if any underlying source (OFAC, anomaly heuristics, or scam-intel — which wraps GoPlus + Etherscan) is temporarily unreachable, that factor is included with `real: false` and `signal: "unreachable"`, contributing 0 to `risk_score`. If all sources are unreachable, the response returns `recommendation: "warn"` (fail-closed, never silent-allow). Recommendation values use plain `allow`/`warn`/`block`.
 
 ## Paid mode wiring
 
 **Cost: $0.001 USDC per call. Fund a dedicated wallet with ~$0.10 USDC + ~$0.50 ETH (gas reserve, though x402 EIP-3009 settlement is gasless from the agent's perspective) on Base to start. That covers ~100 trust checks.**
 
-Paid mode settles $0.001 USDC per call on Base via [x402](https://x402.gitbook.io/) for higher rate limits and signed responses (every factor `real: true`, recommendation ∈ `{allow, warn, block}`). Requires a viem `LocalAccount`.
+Paid mode settles $0.001 USDC per call on Base via [x402](https://x402.gitbook.io/) for higher rate limits and signed responses (factors with `real: true` for successful checks, or `real: false` + `signal: "unreachable"` if a source is temporarily unreachable; recommendation ∈ `{allow, warn, block}`, with fail-closed `warn` if all sources are unreachable). Requires a viem `LocalAccount`.
 
 ```ts
 import { privateKeyToAccount } from "viem/accounts";
@@ -89,7 +89,6 @@ export const character = {
 | **GoPlus token security** | GoPlus trust-list + token-security API (where surfaced) | On-call; recently-deployed contracts may not yet be classified |
 | **Etherscan source verification** | Etherscan `getSourceCode` | Cached per `(address, chainId)` |
 | **Anomaly heuristics** | Fresh-deploy / low-holder / proxy patterns | On-call |
-| **Lookalike detection** | Symbol/name proximity vs known-asset whitelist + recently-active tokens | On-call |
 
 The intended pattern: agent abstains from the swap on `block`, surfaces a warning on `warn`, proceeds on `allow`.
 
@@ -115,10 +114,11 @@ interface TrustCheckResponse {
   trust: {
     recommendation: "allow" | "warn" | "block" | "sample-allow" | "sample-warn" | "sample-block";
     factors: Array<{
-      source: "ofac" | "goplus" | "etherscan_source" | "anomaly" | "lookalike";
+      source: "ofac" | "goplus" | "etherscan_source" | "anomaly" | "paladin.anomaly" | "scam_intel";
+      // Preview emits "anomaly"; paid emits "paladin.anomaly" for the same factor. "scam_intel" wraps GoPlus + Etherscan and appears on paid responses when those upstreams are unreachable.
       signal: string;
       details?: string;
-      real: boolean; // false on preview, true on paid
+      real: boolean; // false on preview; true on paid for successful checks, false when signal is "unreachable"
     }>;
     risk_score?: number | null;
     risk_score_scale?: string;
@@ -165,11 +165,12 @@ curl -sS -X POST https://swap.paladinfi.com/v1/trust-check/preview \
 - **Chain coverage**: Base (chainId 8453) only at this time. Other EVMs on roadmap as the underlying feeds expand multi-chain.
 - **Library trust**: x402 settlement uses [`@x402/fetch@2.11.0`](https://www.npmjs.com/package/@x402/fetch), Apache-2.0, maintained by the x402 Foundation. Pinned exact; recommend `npm audit signatures` in CI.
 - **Eliza alpha drift**: tested against `@elizaos/core@2.0.0-alpha.77`. Newer alphas may shift `composePromptFromState` / `parseKeyValueXml` / `ModelType` semantics; if you hit issues on a different alpha, please file at the issues link below.
+- **PaladinFi server version**: this README documents the response contract of server v0.11.73 (current production as of 2026-05-07). The schema is field-additive (no removed fields); v0.11.73 also tightens the contract — when sources are unreachable, `recommendation` is now `"warn"` rather than `"allow"`, so clients keying off `"allow"` at the prior contract should retest.
 
 ## Roadmap
 
 - **v0.2.0**: optional `EVM_PRIVATE_KEY` runtime auto-resolve (matching `@elizaos/plugin-evm`); broader integration tests against the `@elizaos/core` alpha line; toon-format compatibility.
-- **v0.3.0**: address-poisoning lookalike action exposed as a separate hook agents can compose into transfer flows (not just swap).
+- **v0.3.0**: separate transfer-time risk hook (composable beyond swaps) for address-poisoning detection.
 - **v1.0.0**: production stable, multi-chain as PaladinFi backend expands.
 
 ## Contributing

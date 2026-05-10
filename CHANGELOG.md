@@ -4,6 +4,19 @@ All notable changes to `@paladinfi/eliza-plugin-trust` are documented here. The 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-10
+
+Doc-only patch. No code or runtime changes — paired distribution artifact for PaladinFi server v0.11.73 (per Distribution Discipline Gate). v0.1.0 customers see no behavior change beyond what the server-side v0.11.73 contract change already delivers.
+
+### Changed
+
+- **README**: removed stale "lookalike detection" feature claim from 5 spots (lede, "Why this vs..." section, "What it does" table, TS source-union, v0.3.0 roadmap). Lookalike-symbol detection was removed from PaladinFi production in server v0.11.62 (2026-05-04); the README was not updated at that time.
+- **README**: paid-mode response semantics now document the v0.11.73 fail-closed contract. When an underlying source (OFAC, anomaly heuristics, scam-intel) is temporarily unreachable, the factor is included with `real: false` and `signal: "unreachable"`, contributing 0 to `risk_score`. If all sources are unreachable, the response returns `recommendation: "warn"` instead of the prior `recommendation: "allow"` (closes a silent-allow vector that existed since server v0.11.50).
+- **README**: TS `TrustCheckResponse` factor `source` union widened to include `"paladin.anomaly"` and `"scam_intel"` — paid-mode emits these source strings; the v0.1.0 union under-represented the production response shape (preview emits `"anomaly"` but paid emits `"paladin.anomaly"` for the same factor; `"scam_intel"` wraps GoPlus + Etherscan and appears on paid responses when those upstreams are unreachable).
+- **README**: added Security & disclosures bullet documenting server v0.11.73 contract reference + behavior change advisory for clients keying off `recommendation: "allow"`.
+- **README**: v0.3.0 roadmap line rewritten to drop the "lookalike action" specificity (replaced with generic "transfer-time risk hook for address-poisoning detection").
+- **package.json**: description updated to drop stale "lookalike" reference; `keywords` removed `"lookalike"` entry.
+
 ## [0.1.0] - 2026-05-04
 
 First functional release. Closes the v0.0.x scope gap (LLM extraction + paid x402 settlement). Tracking issue [#1](https://github.com/paladinfi/eliza-plugin-trust/issues/1).
