@@ -4,6 +4,30 @@ All notable changes to `@paladinfi/eliza-plugin-trust` are documented here. The 
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-15
+
+Patch release closing the v0.3.0 Tier-1 ship-debt. No wire-format change; same `paladin-simulate-v2` digest formula. No customer-side action required — `npm install @paladinfi/eliza-plugin-trust@0.3.1` is a drop-in replacement for `0.3.0`.
+
+### Server-side (paladin-server v0.12.1, deployed 2026-05-15)
+
+- **New endpoint** `GET /v1/simulate/health` — public-routable health probe specific to the simulator service. Body carries `service: "paladin-simulator"`, `version: "0.3.1"`, `wireFormat: "paladin-simulate-v2"` so customers can unambiguously identify which service answered. Closes the v0.3.0 Buyer/Skeptic INFO-NEW-1 finding (the co-deployed `/health` returns the swap-router's `0.11.74`, which was a buyer-confusion source).
+- **Quorum tally key-type hardening** (Tier-2 Security M-2): `_read_current_epoch_via_rpc` now keys vote-counting by canonical hex string of the int value rather than the raw int. Defense-in-depth: future numeric-type drift in `_eth_call_currentEpoch_single` (currently returns `int|None`) can't silently mis-cluster votes.
+- **Dead code removal** (Tier-2 Security LOW): the unused `SimulateResponse` Pydantic model was removed; the response handler builds the dict directly. Drift-protection between client + server response shape is now explicitly the signed digest itself (any field-shape divergence breaks JCS canonicalization → digest mismatch → sig recovery fails on the client side). Future maintainers: when adding response fields, update the plugin's `SignedSimulateResponse` interface in lockstep.
+
+### Plugin-side
+
+- **Version bump** `0.3.0 → 0.3.1`. No source-code change to the trust gate, verifier, canonicalizer, or signing-input shape. Bundled `TOKEN_REGISTRY_HASH` unchanged.
+
+### Testing
+
+- **New e2e test** `tests/v0.2.0/e2e/test_07_real_calldata_e2e.py` (in `paladinfi-contracts` repo) — fetches a real Velora swap quote via `/v1/quote`, posts the calldata to `/v1/simulate`, verifies envelope + sig recovery + state-diff invariants. Honest reporting: the simulator's Anvil reverts on Velora's Augustus + Uniswap V3 callback pattern in stateOverride mode (documented Layer-4 limitation in THREAT_MODEL.md). Test handles `ok=false` gracefully (signing chain still verifies; evidence flag written for CI ledger tracking).
+- Test #02, #04, #06 re-run against the v0.3.1 live deploy: all PASS.
+- Live `/v1/simulate/health` verified returning `version: 0.3.1` + correct signer addresses.
+
+### Review
+
+- Tier-2 single-reviewer Security pass (audit-mode framing) on the v0.3.1 delta. Verdict: APPROVE-WITH-MINOR-FIXES, 5 LOW findings (all cosmetic / observability — no funds-loss). Two ship-relevant items applied inline: LOW-3 nginx rate-limit on the new health endpoint (already shipped), LOW-5 evidence flag on `ok=false` in test #07 (applied).
+
 ## [0.3.0] - 2026-05-15
 
 > **⚠ MUST READ before integrating:** v0.3.0 is the first public release of the on-chain-trust-anchor architecture. Read [THREAT_MODEL.md](./THREAT_MODEL.md) §§3-7 before enabling.
