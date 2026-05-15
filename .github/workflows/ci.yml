@@ -1,0 +1,133 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck + test + build (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: "npm"
+
+      # npm install (not ci) per project convention — sister package agentkit-actions
+      # hit a lockfile optional-peer-dep issue with utf-8-validate@5.0.10 on `npm ci`.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --no-progress
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test
+
+  package:
+    name: npm pack + publish-readiness gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --no-progress
+
+      - name: Build
+        run: npm run build
+
+      # Verify tarball shape: must contain dist/, README, LICENSE, CHANGELOG,
+      # THREAT_MODEL.md, package.json — and must NOT ship raw src/*.ts.
+      - name: npm pack (dry-run)
+        run: |
+          npm pack --dry-run 2>&1 | tee pack-output.txt
+          echo
+          echo "=== assert THREAT_MODEL.md present ==="
+          grep -q "THREAT_MODEL.md" pack-output.txt || (echo "FAIL: THREAT_MODEL.md missing from tarball" && exit 1)
+          echo "=== assert README.md present ==="
+          grep -q "README.md" pack-output.txt || (echo "FAIL: README.md missing from tarball" && exit 1)
+          echo "=== assert LICENSE present ==="
+          grep -q "LICENSE" pack-output.txt || (echo "FAIL: LICENSE missing from tarball" && exit 1)
+          echo "=== assert CHANGELOG.md present ==="
+          grep -q "CHANGELOG.md" pack-output.txt || (echo "FAIL: CHANGELOG.md missing from tarball" && exit 1)
+          echo "=== assert dist/index.d.ts present ==="
+          grep -q "dist/index.d.ts" pack-output.txt || (echo "FAIL: dist/index.d.ts missing from tarball" && exit 1)
+          echo "=== assert no raw src/*.ts files in tarball ==="
+          if grep -qE "src/[^/]+\.ts" pack-output.txt; then
+            echo "FAIL: tarball contains raw src/*.ts files — remove 'src' from package.json:files"
+            grep -E "src/[^/]+\.ts" pack-output.txt
+            exit 1
+          fi
+
+      # Closes M-H7 partially: ensure CHANGELOG.md has a header for the
+      # version currently in package.json. The 'no XX placeholder' enforcement
+      # is intentionally WARN-not-FAIL here — placeholder is by design until
+      # release-tag time. A separate release.yml workflow (tag push) will hard-
+      # gate the date being set. See `feedback_hostinger_deploy_full_tree`-style
+      # discipline.
+      - name: CHANGELOG header presence check (matches package.json version)
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "package.json version: $PKG_VERSION"
+          HEADER=$(grep -E "^## \[$PKG_VERSION\]" CHANGELOG.md || echo "")
+          if [ -z "$HEADER" ]; then
+            echo "FAIL: CHANGELOG.md has no '## [$PKG_VERSION]' header for the version in package.json"
+            exit 1
+          fi
+          echo "CHANGELOG header line: $HEADER"
+          if echo "$HEADER" | grep -qE "20[0-9]{2}-[0-9X]{2}-XX"; then
+            echo "WARN: CHANGELOG date is placeholder. This is OK pre-release; hard gate is on release tag."
+          fi
+
+  audit:
+    name: npm audit (prod deps only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    needs: test
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --no-progress
+      - name: Audit production deps (high+ only)
+        run: npm audit --omit=dev --audit-level=high
+
+# Deferred CI gates tracked for follow-up (require additional tooling/spec):
+#   - operator-distinctness gate (plan §7 step 43) — needs criteria spec
+#   - §17 paragraph-count grep (plan §17 ≤4-paragraphs rule) — needs target file spec
+#   - license-check on transitive deps (M-MED-6) — add `license-checker` once allowlist is finalized
+#   - cross-language JCS byte-equality with paladin-server (uses tests/fixtures/jcs-fixtures.json which
+#     is generated by scripts/generate-jcs-fixtures.mjs); already runs via vitest. CI gate to re-run
+#     generator + diff would catch drift but is overkill if generator is deterministic + checked in.

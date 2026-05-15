@@ -1,0 +1,18 @@
+{
+  "_comment": "Cross-language byte-equality fixtures for domain separators. v2 hardening (2026-05-15, post Security audit C-1): the separator is now a 32-byte keccak256 of the typed-domain label, NOT the raw UTF-8 bytes. Pre-v2 form retained under `_v1_legacy` for reference only. If you add a new separator, regenerate via `npm run generate-domain-separator-fixtures` (TS side) and re-run Python parity test. Both sides assert byte-equality against this file. Drift here means cross-language signatures will not interoperate.",
+  "_v1_legacy_DEPRECATED_2026-05-15": {
+    "DOMAIN_SEPARATOR_SIMULATE_v1_raw_string": {
+      "string": "paladin-simulate-v1",
+      "utf8_hex_lower": "0x70616c6164696e2d73696d756c6174652d7631",
+      "byte_length": 19,
+      "note": "DEPRECATED. Pre-v2 weak structural separation. Do not use."
+    }
+  },
+  "DOMAIN_SEPARATOR_SIMULATE": {
+    "label": "PaladinFi/simulate/v2",
+    "label_utf8_hex_lower": "0x50616c6164696e46692f73696d756c6174652f7632",
+    "keccak256_hex_lower": "0x2161cb2a5c990e8430b734f560565756d7f2067c710af397a8022995897730ee",
+    "byte_length": 32,
+    "note": "32-byte keccak256 of label. Used as OUTER hash prefix: digest = keccak256(this || keccak256(JCS(body)))"
+  }
+}

@@ -103,3 +103,45 @@ export const DEFAULT_CONFIG: PaladinTrustConfig = {
   mode: "preview",
   defaultChainId: 8453,
 };
+
+// =============================================================================
+// v0.2.0 NEW — settlement-state types for paid call ergonomics
+// =============================================================================
+
+/**
+ * x402 payment-settlement state surfaced from `client.paidEx()`.
+ *
+ * Per v11 §4.3 step 9 + R7 Engineering HIGH-1 fix: the handler distinguishes
+ * "x402 didn't run" (refund tracker) from "x402 ran but we don't know if it
+ * settled on-chain" (debit + warn-log + reconcile within 5 min).
+ *
+ * - `not-attempted`: paid call returned an error before viem signed. Refund.
+ *   Examples: HTTPS gate failed, network error before fetch, AbortSignal,
+ *   pre-sign hook aborted (treasury mismatch).
+ * - `attempted-confirmed`: paid call succeeded, server returned 200, x402 lib
+ *   reports settlement complete. No refund needed; tracker stays debited.
+ * - `attempted-unknown`: paid call threw mid-flow OR server returned non-2xx
+ *   AFTER the X-PAYMENT header was POSTed. Cannot determine on-chain truth
+ *   from the client side. Tracker debits + warn-log entry written; handler
+ *   should poll x402 settlement events on Base for ~5 min to reconcile.
+ * - `confirmed-failed`: server returned HTTP 402 even after the retry attempt
+ *   (payment explicitly rejected). Refund.
+ */
+export type SettlementState =
+  | "not-attempted"
+  | "attempted-confirmed"
+  | "attempted-unknown"
+  | "confirmed-failed";
+
+/**
+ * Result envelope returned from `client.paidEx()` on success. v0.1.0
+ * `client.paid()` keeps its existing `Promise<TrustCheckResponse>` return
+ * type for backwards-compat; v0.2.0 paladin_swap action uses paidEx() to
+ * receive the settlement metadata for refund accounting.
+ */
+export interface PaidExResult {
+  data: TrustCheckResponse;
+  settlementState: SettlementState;
+  /** On-chain settlement tx hash if surfaced via response header. */
+  txHash?: string;
+}
